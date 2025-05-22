@@ -63,70 +63,77 @@ app.post('/ask', async (req, res) => {
   await page.goto(duckURL, { waitUntil: 'networkidle2' });
   await page.waitForSelector('a.result__a, a[data-testid="result-title-a"]');
 
-  const firstLink = await page.$eval('a.result__a, a[data-testid="result-title-a"]', el => el.href);
-  console.log('🔗 First result link:', firstLink);
+  // Get first 2 links instead of just the first
+  const links = await page.$$eval(
+    'a.result__a, a[data-testid="result-title-a"]',
+    (elements) => elements.slice(0, 2).map(el => el.href)
+  );
+  console.log('🔗 Top 2 links:', links);
 
-  let contentToSend = '';
-  let sourceType = 'web';
+  let combinedContent = '';
+  let resources = [];
 
-  if (firstLink.endsWith('.pdf')) {
-    console.log('📄 PDF detected, downloading...');
-    try {
-      const pdfPath = await downloadPDF(firstLink);
-      contentToSend = await extractTextFromPDF(pdfPath);
-      if (!contentToSend.trim()) {
-        console.log('🔍 PDF is likely scanned. Running OCR...');
-        contentToSend = await extractOCRTextFromPDF(pdfPath);
-        sourceType = 'ocr';
+  for (const link of links) {
+    let contentToSend = '';
+    let sourceType = 'web';
+
+    if (link.endsWith('.pdf')) {
+      console.log('📄 PDF detected:', link);
+      try {
+        const pdfPath = await downloadPDF(link);
+        contentToSend = await extractTextFromPDF(pdfPath);
+        if (!contentToSend.trim()) {
+          console.log('🔍 PDF is likely scanned. Running OCR...');
+          contentToSend = await extractOCRTextFromPDF(pdfPath);
+          sourceType = 'ocr';
+        }
+        resources.push(`PDF: ${path.basename(link)}`);
+        await fs.remove(pdfPath);
+        await fs.remove('./ocr-images');
+      } catch (err) {
+        console.error('❌ PDF handling failed:', err);
+        continue;
       }
-      await fs.remove(pdfPath);
-      await fs.remove('./ocr-images');
-    } catch (err) {
-      console.error('❌ PDF handling failed:', err);
+    } else {
+      console.log('🌐 Webpage detected:', link);
+      try {
+        await page.goto(link, { waitUntil: 'networkidle2' });
+        
+
+        
+        contentToSend = await page.evaluate(() => document.body.innerText);
+        resources.push(`Page: ${await page.title()}`);
+      } catch (err) {
+        console.error('❌ Page handling failed:', err);
+        continue;
+      }
     }
-  } else {
-    await page.goto(firstLink, { waitUntil: 'networkidle2' });
-    try {
-      await page.evaluate(() => {
-        const enBtn = [...document.querySelectorAll('a, button')].find(el =>
-          el.innerText.toLowerCase().includes('english')
-        );
-        if (enBtn) enBtn.click();
-      });
-      await page.waitForTimeout(2000);
-    } catch (err) {
-      console.log('⚠️ No language switch button found.');
-    }
-    contentToSend = await page.content();
+
+    combinedContent += `\n\n--- Source: ${link} ---\n${contentToSend}`;
+    console.log(`📤 Content (${sourceType}) from ${link}. Truncated:\n`, contentToSend.slice(0, 200), '...');
   }
 
   await browser.close();
-  console.log(`📤 Content (${sourceType}) sent to GPT. Truncated:\n`, contentToSend.slice(0, 500), '...');
 
   const prompt = `
-You are a university chatbot. Use the following content to answer the question:
----
-${contentToSend}
+You are a university chatbot. Use the following content from multiple sources to answer the question:
+${combinedContent}
 ---
 Answer the question: "${question}"
 Respond in the same language used in the question.
+Combine information from different sources when relevant.
 Format:
-Answer: ...
-Link: ${firstLink}
-Resources: List any documents or files mentioned.
+Answer: ... (combine information if needed)
+Resources: ${resources.join(', ')}
+Links: ${links.join(', ')}
 `;
 
+  // Rest of your OpenAI code remains the same...
   const completion = await openai.chat.completions.create({
     model: 'gpt-4o',
     messages: [
-      {
-        role: 'system',
-        content: 'You are a helpful assistant that answers university-related questions.',
-      },
-      {
-        role: 'user',
-        content: prompt,
-      },
+      { role: 'system', content: 'You are a helpful assistant that answers university-related questions.' },
+      { role: 'user', content: prompt }
     ],
   });
 
