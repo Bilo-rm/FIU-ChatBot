@@ -6,13 +6,12 @@ const path = require('path');
 const pdfParse = require('pdf-parse');
 const { fromPath } = require('pdf2pic');
 const Tesseract = require('tesseract.js');
-const { OpenAI } = require('openai');
 require('dotenv').config();
+const cors = require('cors');
 
 const app = express();
+app.use(cors());
 app.use(express.json());
-
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 const downloadPDF = async (url, filename = 'document.pdf') => {
   const pdfPath = path.join(__dirname, filename);
@@ -47,6 +46,17 @@ app.post('/ask', async (req, res) => {
   const question = req.body.question;
   console.log('🔍 Question received:', question);
 
+  // Filter unrelated questions (optional)
+  const universityKeywords = ['final international university', 'fiu', 'university', 'campus', 'tuition', 'fees','final uluslararası üniversitesi'];
+  const isUniversityRelated = universityKeywords.some(keyword =>
+    question.toLowerCase().includes(keyword)
+  );
+  if (!isUniversityRelated) {
+    return res.json({
+      answer: "❌ Your question seems unrelated to the university. Please ask something about the university."
+    });
+  }
+
   const browser = await puppeteer.launch({
     headless: false,
     executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
@@ -63,7 +73,6 @@ app.post('/ask', async (req, res) => {
   await page.goto(duckURL, { waitUntil: 'networkidle2' });
   await page.waitForSelector('a.result__a, a[data-testid="result-title-a"]');
 
-  // Get first 2 links instead of just the first
   const links = await page.$$eval(
     'a.result__a, a[data-testid="result-title-a"]',
     (elements) => elements.slice(0, 2).map(el => el.href)
@@ -83,7 +92,7 @@ app.post('/ask', async (req, res) => {
         const pdfPath = await downloadPDF(link);
         contentToSend = await extractTextFromPDF(pdfPath);
         if (!contentToSend.trim()) {
-          console.log('🔍 PDF is likely scanned. Running OCR...');
+          console.log('🔍 PDF likely scanned. Running OCR...');
           contentToSend = await extractOCRTextFromPDF(pdfPath);
           sourceType = 'ocr';
         }
@@ -98,9 +107,6 @@ app.post('/ask', async (req, res) => {
       console.log('🌐 Webpage detected:', link);
       try {
         await page.goto(link, { waitUntil: 'networkidle2' });
-        
-
-        
         contentToSend = await page.evaluate(() => document.body.innerText);
         resources.push(`Page: ${await page.title()}`);
       } catch (err) {
@@ -116,32 +122,41 @@ app.post('/ask', async (req, res) => {
   await browser.close();
 
   const prompt = `
-You are a university chatbot. Use the following content from multiple sources to answer the question:
-${combinedContent}
----
-Answer the question: "${question}"
-Respond in the same language used in the question.
-Combine information from different sources when relevant.
-Format:
-Answer: ... (combine information if needed)
-Resources: ${resources.join(', ')}
-Links: ${links.join(', ')}
-`;
+  You are a helpful chatbot assistant designed to answer user questions about Final International University (FIU) using the information provided below. Use the content from the sources to answer the question as accurately as possible. If the information is not directly available, you can suggest that the user check the provided links for more details.
+  
+  Content from multiple sources:
+  ${combinedContent}
+  ---
+  Question: "${question}"
+  
+  Instructions:
+  - Answer the question based on the provided content.
+  - If the answer is unclear or incomplete, mention that the user should check the provided links for more detailed information.
+  - Always list the sources and links at the end of your response.
+  
+  Format:
+  Answer: [Provide the answer here]
+  Resources: ${resources.join(', ')}
+  Links: ${links.join(', ')}
+  `;
+  
 
-  // Rest of your OpenAI code remains the same...
-  const completion = await openai.chat.completions.create({
-    model: 'gpt-4o',
-    messages: [
-      { role: 'system', content: 'You are a helpful assistant that answers university-related questions.' },
-      { role: 'user', content: prompt }
-    ],
-  });
 
-  const answer = completion.choices[0].message.content;
-  console.log('✅ GPT Answer:', answer);
-
-  res.json({ answer });
+  try {
+    const response = await axios.post('http://localhost:11434/api/generate', {
+      model: 'deepseek-llm:7b-chat',
+      prompt: prompt,
+      stream: false
+    });
+    const answer = response.data.response;
+    console.log('✅ DeepSeek Answer:', answer);
+    res.json({ answer });
+  } catch (error) {
+    console.error('❌ Error from DeepSeek:', error);
+    res.status(500).json({ error: 'Failed to get response from DeepSeek model.' });
+  }
 });
+
 
 app.listen(3000, () => {
   console.log('🚀 Server running at http://localhost:3000');
