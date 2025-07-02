@@ -122,29 +122,33 @@ app.post('/ask', async (req, res) => {
   await browser.close();
 
   const prompt = `
-  You are a helpful chatbot assistant designed to answer user questions about Final International University (FIU) using the information provided below. Use the content from the sources to answer the question as accurately as possible. If the information is not directly available, you can suggest that the user check the provided links for more details.
-  
-  Content from multiple sources:
-  ${combinedContent}
-  ---
-  Question: "${question}"
-  
-  Instructions:
-  - Answer the question based on the provided content.
-  - If the answer is unclear or incomplete, mention that the user should check the provided links for more detailed information.
-  - Always list the sources and links at the end of your response.
-  
-  Format:
-  Answer: [Provide the answer here]
-  Resources: ${resources.join(', ')}
-  Links: ${links.join(', ')}
-  `;
+You are a helpful assistant for Final International University (FIU). Your task is to provide direct, specific answers to user questions using the information from the university's official sources below.
+
+Content from official FIU sources:
+${combinedContent}
+---
+User Question: "${question}"
+
+Instructions:
+- Extract and provide the SPECIFIC information that answers the user's question
+- Be direct and factual - don't say "the content doesn't specify" 
+- If you find partial information, provide what you know and indicate what additional details might be available
+- Focus on giving actionable information rather than deflecting to other sources
+- Only mention checking additional sources if the user needs more comprehensive details beyond what you can provide
+
+Response Format:
+[✔ Provide a clear and direct answer using the official content.]
+[📎 If there are relevant files or links, provide them here clearly.]
+[ℹ️ For additional details or the most current information, you can visit: ${links.join(' or ')}]
+
+Sources: ${resources.join(', ')}
+`;
   
 
 
   try {
     const response = await axios.post('http://localhost:11434/api/generate', {
-      model: 'deepseek-llm:7b-chat',
+      model: 'qwen2.5:3b',
       prompt: prompt,
       stream: false
     });
